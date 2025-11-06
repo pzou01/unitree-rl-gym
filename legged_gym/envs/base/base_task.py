@@ -12,7 +12,7 @@ class BaseTask():
         self.gym = gymapi.acquire_gym()
 
         self.sim_params = sim_params
-        self.physics_engine = physics_engine
+        self.physics_engine = physics_engine # 用的是那个引擎 有软体和刚体
         self.sim_device = sim_device
         sim_device_type, self.sim_device_id = gymutil.parse_device_str(self.sim_device)
         self.headless = headless

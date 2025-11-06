@@ -99,6 +99,7 @@ class LeggedRobotCfg(BaseConfig):
         max_push_vel_xy = 1.
 
     class rewards:
+        # 可以看到这里 sacles 是一个类对象 我们后面使用也是通过变成字典来使用
         class scales:
             termination = -0.0
             tracking_lin_vel = 1.0
