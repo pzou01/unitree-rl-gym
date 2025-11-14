@@ -16,7 +16,7 @@ from legged_gym.envs.base.base_task import BaseTask
 from legged_gym.utils.math import wrap_to_pi
 from legged_gym.utils.isaacgym_utils import get_euler_xyz as get_euler_xyz_in_tensor
 from legged_gym.utils.helpers import class_to_dict
-from .legged_robot_config import LeggedRobotCfg # 这里就是保持一些设定好的参数的值
+from .legged_robot_config import LeggedRobotCfg # 这里就是一些设定好的参数的值
 
 class LeggedRobot(BaseTask):
 
@@ -137,7 +137,7 @@ class LeggedRobot(BaseTask):
         self.p_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False) # 关节 PD 控制器的 P/D 增益；在本函数末尾“加载默认关节角 & PD 增益”那段 for 循环里按关节名填写。_compute_torques() 用到。
         self.d_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False) #
         self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device,
-                                   requires_grad=False) # 当前/上一时刻的策略动作；
+                                   requires_grad=False)
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device,
                                         requires_grad=False)
 
@@ -380,18 +380,25 @@ class LeggedRobot(BaseTask):
             self.envs.append(env_handle)
             self.actor_handles.append(actor_handle)
 
+        # feet_names 通常来自 cfg.asset.foot_name 定义的通配名（比如 "foot"）。
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
+        # self.gym.find_actor_rigid_body_handle(...) 会返回这个刚体在仿真中的 index。
         for i in range(len(feet_names)):
+            # 最终 self.feet_indices 就是一个整数列表，比如 [12, 18, 24, 30]，每个数字表示 foot 在 rigid body tensor 中的行号。
             self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0],
                                                                          feet_names[i])
+            # 后面使用的时候 self.contact_forces[:, self.feet_indices, 2] 就会是 num——env 的四个feet 在012 xyz z轴上的力的大小了
 
+        # 记录所有被惩罚接触的刚体索引，比如 "thigh", "calf", "hip"。
+        # 当这些部件接触地面时，reward 会减分（_reward_collision）。
         self.penalised_contact_indices = torch.zeros(len(penalized_contact_names), dtype=torch.long, device=self.device,
                                                      requires_grad=False)
         for i in range(len(penalized_contact_names)):
             self.penalised_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0],
                                                                                       self.actor_handles[0],
                                                                                       penalized_contact_names[i])
-
+        # 这一类是“触地就结束 episode”的 body，比如 "base"。
+        # 在 step() 里会检查：如果 base 触地（倒下），环境直接 done。
         self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long,
                                                        device=self.device, requires_grad=False)
         for i in range(len(termination_contact_names)):
@@ -693,6 +700,7 @@ class LeggedRobot(BaseTask):
         if self.cfg.domain_rand.push_robots:
             self._push_robots() # 如果开了扰动训练：在计算完奖励与 reset 之后，对仍在跑的 env 注入一次随机“推搡”（改 base 线速度）——影响下一步观测，让策略学会抗扰动。
 
+        # 这里的action是在step刚采取的
         self.compute_observations()  # in some cases a simulation step might be required to refresh some obs (for example body positions) 生成下一步要喂给策略的 obs（把最新状态、以及刚准备好的 command打包进去）。
 
         # 缓存“上一帧”的动作/速度，用于下帧的差分项（比如 V 控制的加速度差分、平滑/正则项、或诊断）。
@@ -780,6 +788,14 @@ class LeggedRobot(BaseTask):
 
     def compute_observations(self):
         """ Computes observations
+        机身线速度 xyz 3个
+        机身角速度 xyz 3个
+        重力 xyz 3个
+        命令 3个
+        12个关节的 坐标
+        12个关机的 关节速度
+        12个动作
+         行走任务的标配
         """
         self.obs_buf = torch.cat((self.base_lin_vel * self.obs_scales.lin_vel, #base的线速度 当前移动速度 * 缩放因子
                                   self.base_ang_vel * self.obs_scales.ang_vel, # 角速度
@@ -802,7 +818,7 @@ class LeggedRobot(BaseTask):
         """ Prepares a list of reward functions, whcih will be called to compute the total reward.
             Looks for self._reward_<REWARD_NAME>, where <REWARD_NAME> are names of all non zero reward scales in the cfg.
         """
-        # remove zero scales + multiply non-zero ones by dt
+        # remove zero scales + multiply non-zero ones by dt 这里会根据参数的定义然后来找对应的reward
         for key in list(self.reward_scales.keys()):
             scale = self.reward_scales[key]
             if scale==0:
@@ -816,7 +832,7 @@ class LeggedRobot(BaseTask):
             if name=="termination":
                 continue
             self.reward_names.append(name)
-            name = '_reward_' + name
+            name = '_reward_' + name # 例如这里的 专属 _reward_
             self.reward_functions.append(getattr(self, name))
 
         # reward episode sums
@@ -825,11 +841,11 @@ class LeggedRobot(BaseTask):
 
     #------------ reward functions 奖励函数的设定 19个  ----------------
     def _reward_lin_vel_z(self):
-        # Penalize z axis base linear velocity
+        # Penalize z axis base linear velocity  基于z轴的 线速度
         return torch.square(self.base_lin_vel[:, 2]) #取平方 z轴 如果上下 都懂就惩罚 z轴越大说明不稳定
     
     def _reward_ang_vel_xy(self):
-        # Penalize xy axes base angular velocity
+        # Penalize xy axes base angular velocity 惩罚绕x和y轴的角速度  防止roll pitch 抖动
         return torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1) # 这里dim1把 roll和pitch x和y轴的角速度都平方 不希望晃动
 
     def _reward_orientation(self):
@@ -837,7 +853,7 @@ class LeggedRobot(BaseTask):
         return torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1) #这里也是 世界重力是  0 0 -1 如果站着重力就是 对的 如果斜了 x和y就不是0了然后就要 取值代表身体倾斜情况
 
     def _reward_base_height(self):
-        # Penalize base height away from target 约束机体高度 z 轴
+        # Penalize base height away from target 约束机体高度 z 轴 高度不要偏离目标高度
         base_height = self.root_states[:, 2]
         return torch.square(base_height - self.cfg.rewards.base_height_target) # 在一个base的高度 不要乱跳或者趴地
     
@@ -883,13 +899,13 @@ class LeggedRobot(BaseTask):
         return torch.sum((torch.abs(self.torques) - self.torque_limits*self.cfg.rewards.soft_torque_limit).clip(min=0.), dim=1)
 
     def _reward_tracking_lin_vel(self):
-        # Tracking of linear velocity commands (xy axes) 对平面的速度跟踪 命令的速度的值和你身体的值 这里给的就是一个
+        # Tracking of linear velocity commands (xy axes) 对平面的速度跟踪 命令给的速度的值 和 你身体的值 这里给的就是一个
         # exp(-error /a ) 误差越小，指数越接近 1；误差大，奖励迅速衰减到 0。 tracking_sigma：决定“容忍度”。越大 → 奖励曲线更平缓；越小 → 要求更严格
-        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
+        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1) # 这里 base_lin_vel = [v_x, v_y, v_z] 2是切片的意思 也就是 要base的x和y的速度
         return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
     
     def _reward_tracking_ang_vel(self):
-        # Tracking of angular velocity commands (yaw)  角速度  身体z 轴角速度
+        # Tracking of angular velocity commands (yaw)  角速度  同理这里也是 要 roll pitch的速度
         ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
         return torch.exp(-ang_vel_error/self.cfg.rewards.tracking_sigma)
 
@@ -921,3 +937,5 @@ class LeggedRobot(BaseTask):
         # penalize high contact forces 罚“落脚太猛/冲击过大”
         #与阈值 max_contact_force 比较；只对超过阈值的部分计惩罚（用 clip(min=0.) 把没超的置 0）。作用：防止“砸地板”“硬着陆”，鼓励轻柔、可控的触地，提高舒适性与安全性（也更利于真实机器人
         return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1) # 看的是每只脚的接触力模长（包含 x,y,z）
+
+

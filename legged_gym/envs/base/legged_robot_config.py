@@ -1,8 +1,57 @@
 from .base_config import BaseConfig
 
+"""
+这些嵌套 class 是“命名空间式配置”
+
+class LeggedRobotCfg(BaseConfig): 里面这些：
+
+class env
+
+class terrain
+
+class commands
+
+class init_state
+
+class control
+
+class asset
+
+class domain_rand
+
+class rewards
+
+class normalization
+
+class noise
+
+class viewer
+
+class sim
+
+class sim.physx
+
+以及 LeggedRobotCfgPPO 里的 policy/algorithm/runner
+
+都不是“要实例化才生效的逻辑类”，而是 配置容器：
+
+用法就是：
+
+env_cfg = LeggedRobotCfg()
+# 或者直接用 class_to_dict(LeggedRobotCfg)
+
+num_envs = env_cfg.env.num_envs
+reward_scales = env_cfg.rewards.scales.__dict__
+...
+
+
+
+"""
+
 class LeggedRobotCfg(BaseConfig):
+
     class env: # 整体环境
-        num_envs = 4096
+        num_envs = 4096 # 4096个并行的环境 
         num_observations = 48
         num_privileged_obs = None # 不返回 if not None a priviledge_obs_buf will be returned by step() (critic obs for assymetric training). None is returned otherwise
         num_actions = 12
@@ -83,7 +132,7 @@ class LeggedRobotCfg(BaseConfig):
         self_collisions = 0 #  自碰撞设置（0=启用，1=禁用） 1 to disable, 0 to enable...bitwise filter
         # 几何和碰撞体优化
         replace_cylinder_with_capsule = True #  把碰撞体从圆柱体改成胶囊体（两端带半球） 更稳定、更快，不容易产生物理抖动。 replace collision cylinders with capsules, leads to faster/more stable simulation
-        flip_visual_attachments = True # Some .obj meshes must be flipped from y-up to z-up 把视觉模型从 “Y-up” 转换为 “Z-up” 坐标系（某些 .obj 模型需要）
+        flip_visual_attachments = True # Some .obj meshes must be flipped from y-up to z-up 把视觉模型从 “Y-up” 转换为 “Z-up” 坐标系这个 unitree的 机器人是躺进来的， 要变到z轴去，也就是 机器人的向上是y轴 但是isaac 上是z轴 我们要调整对应isaac
 
         # 动力学属性（物理仿真层）
         density = 0.001 #材料密度（kg/m³） 影响质量计算
@@ -109,10 +158,10 @@ class LeggedRobotCfg(BaseConfig):
     class rewards:
         # 可以看到这里 sacles 是一个类对象 我们后面使用也是通过变成字典来使用
         class scales:
-            termination = -0.0
-            tracking_lin_vel = 1.0
-            tracking_ang_vel = 0.5
-            lin_vel_z = -2.0
+            termination = -0.0 # 终结 
+            tracking_lin_vel = 1.0 # 追踪线速度 
+            tracking_ang_vel = 0.5 # 追踪角速度 
+            lin_vel_z = -2.0 
             ang_vel_xy = -0.05
             orientation = -0.
             torques = -0.00001
@@ -130,7 +179,7 @@ class LeggedRobotCfg(BaseConfig):
         soft_dof_pos_limit = 1. # percentage of urdf limits, values above this limit are penalized
         soft_dof_vel_limit = 1.
         soft_torque_limit = 1.
-        base_height_target = 1.
+        base_height_target = 1. # 基本高度目标是1 这是人形机器人的高度吧 
         max_contact_force = 100. # forces above this value are penalized
 
     class normalization: #归一化的参数 为了让输入数据在训练时数值稳定
